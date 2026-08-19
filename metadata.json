@@ -1,0 +1,6 @@
+{
+  "name": "Toyota BZ Tesla Charger Finder",
+  "description": "Find compatible Tesla Superchargers supporting Plug and Charge along routes for the Toyota bZ 2026 NACS model.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
