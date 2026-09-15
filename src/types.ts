@@ -51,12 +51,27 @@ export interface ChargeSession {
 }
 
 export interface VehicleSpecs {
+  id: string;
   brand: string;
   model: string;
+  trim: string;
   year: number;
+  drivetrain: 'FWD' | 'AWD' | 'RWD';
   batteryCapacityKwh: number;
+  usableCapacityKwh?: number;
   maxChargeRateKw: number;
   nacsNative: boolean;
   plugAndChargeSupported: boolean;
   estimatedRangeMiles: number;
+  epaRangeKm?: number;
+  horsepowerHp?: number;
+  consumptionWhPerMile?: number;
+  portTypeDescription?: string;
+  notes?: string;
+  isCustom?: boolean;
+  // Environmental & Load modifiers
+  weatherCondition?: 'optimal' | 'cold' | 'freezing' | 'hot';
+  cargoLoad?: 'light' | 'normal' | 'heavy' | 'roof_box';
 }
+
+export type DistanceUnit = 'miles' | 'km';

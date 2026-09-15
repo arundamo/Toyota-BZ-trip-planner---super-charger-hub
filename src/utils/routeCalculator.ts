@@ -1,4 +1,5 @@
 import { ChargingStation, LatLng, VehicleSpecs } from '../types';
+import { getEffectiveVehicleRange } from '../data/toyotaModels';
 
 export type TripType = 'one-way' | 'two-way';
 export type StopsPreference = 'auto' | number;
@@ -42,6 +43,9 @@ export interface RouteChargeSummary {
   stopsPreference: StopsPreference; // User-selected stops preference
   plannedStopCount: number;
   stopsPreferenceNote?: string;
+  effectiveRangeMiles: number;
+  consumptionPenaltyPercent: number;
+  rangeAdjustmentExplanation: string;
 }
 
 // Haversine formula for distance in miles between coordinates
@@ -140,7 +144,10 @@ export function calculateRouteChargeTelemetry(
 ): RouteChargeSummary {
   const safeStartingSoc = Math.min(100, Math.max(5, startingSoc));
   const safeTargetDestSoc = Math.min(95, Math.max(10, targetDestinationSoc));
-  const socPerMile = 100 / specs.estimatedRangeMiles;
+  
+  // Calculate effective range accounting for weather, aerodynamic load, and user customizations
+  const { effectiveRangeMiles, consumptionPenaltyPercent, explanation: rangeAdjustmentExplanation } = getEffectiveVehicleRange(specs);
+  const socPerMile = 100 / Math.max(50, effectiveRangeMiles);
 
   if (!originCoords || !destCoords) {
     return {
@@ -164,7 +171,10 @@ export function calculateRouteChargeTelemetry(
       hasDestinationCharging,
       stopsPreference,
       plannedStopCount: 0,
-      stopsPreferenceNote: 'Awaiting route coordinates'
+      stopsPreferenceNote: 'Awaiting route coordinates',
+      effectiveRangeMiles,
+      consumptionPenaltyPercent,
+      rangeAdjustmentExplanation
     };
   }
 
@@ -239,7 +249,10 @@ export function calculateRouteChargeTelemetry(
         tripType,
         stopsPreference,
         plannedStopCount: 0,
-        stopsPreferenceNote: preferenceNote || (isDirectSafe ? 'Direct route' : 'Direct route with low battery warning')
+        stopsPreferenceNote: preferenceNote || (isDirectSafe ? 'Direct route' : 'Direct route with low battery warning'),
+        effectiveRangeMiles,
+        consumptionPenaltyPercent,
+        rangeAdjustmentExplanation
       };
     }
 
@@ -349,7 +362,10 @@ export function calculateRouteChargeTelemetry(
       tripType,
       stopsPreference,
       plannedStopCount: calculatedStops.length,
-      stopsPreferenceNote: preferenceNote
+      stopsPreferenceNote: preferenceNote,
+      effectiveRangeMiles,
+      consumptionPenaltyPercent,
+      rangeAdjustmentExplanation
     };
   }
 
@@ -454,7 +470,10 @@ export function calculateRouteChargeTelemetry(
       destinationChargeAddedSoc,
       stopsPreference,
       plannedStopCount: 0,
-      stopsPreferenceNote: preferenceNote
+      stopsPreferenceNote: preferenceNote,
+      effectiveRangeMiles,
+      consumptionPenaltyPercent,
+      rangeAdjustmentExplanation
     };
   }
 
@@ -605,7 +624,10 @@ export function calculateRouteChargeTelemetry(
     destinationChargeAddedSoc,
     stopsPreference,
     plannedStopCount: allStops.length,
-    stopsPreferenceNote: preferenceNote
+    stopsPreferenceNote: preferenceNote,
+    effectiveRangeMiles,
+    consumptionPenaltyPercent,
+    rangeAdjustmentExplanation
   };
 }
 
