@@ -24,7 +24,7 @@ export function getDistance(p1: LatLng, p2: LatLng): number {
 
 // Pre-indexed verified Tesla Superchargers with NACS open to Toyota bZ
 export const FALLBACK_STATIONS: ChargingStation[] = [
-  // Ontario Highway 401 & 403 Corridors (Waterloo, Kitchener, Cambridge, Guelph, Toronto, Kingston, Cornwall)
+  // Ontario Highway 401 & 403 Corridors (Waterloo, Kitchener, Cambridge, Guelph, Toronto, Kingston, Cornwall, Montreal)
   {
     id: "ts-cambridge-on",
     name: "Tesla Supercharger - Cambridge",
@@ -71,6 +71,21 @@ export const FALLBACK_STATIONS: ChargingStation[] = [
     status: "operational"
   },
   {
+    id: "ts-london-on",
+    name: "Tesla Supercharger - London (Wellington Rd)",
+    address: "1098 Wellington Rd, London, ON N6E 1M3",
+    position: { lat: 42.9421, lng: -81.2185 },
+    speedKw: 250,
+    chargerType: "V3 Supercharger",
+    plugAndCharge: true,
+    connectorType: "NACS",
+    totalStalls: 16,
+    availableStalls: 10,
+    detourTimeMinutes: 3,
+    costPerKwh: 0.36,
+    status: "operational"
+  },
+  {
     id: "ts-mississauga-on",
     name: "Tesla Supercharger - Mississauga (Meadowvale)",
     address: "6750 Meadowvale Town Centre Cir, Mississauga, ON L5N 2R5",
@@ -83,6 +98,36 @@ export const FALLBACK_STATIONS: ChargingStation[] = [
     availableStalls: 14,
     detourTimeMinutes: 3,
     costPerKwh: 0.38,
+    status: "operational"
+  },
+  {
+    id: "ts-oshawa-on",
+    name: "Tesla Supercharger - Oshawa (Harmony)",
+    address: "1383 Harmony Rd N, Oshawa, ON L1H 7K5",
+    position: { lat: 43.9352, lng: -78.8315 },
+    speedKw: 250,
+    chargerType: "V3 Supercharger",
+    plugAndCharge: true,
+    connectorType: "NACS",
+    totalStalls: 16,
+    availableStalls: 12,
+    detourTimeMinutes: 2,
+    costPerKwh: 0.37,
+    status: "operational"
+  },
+  {
+    id: "ts-porthope-on",
+    name: "Tesla Supercharger - Port Hope (Highway 401)",
+    address: "2211 County Rd 28, Port Hope, ON L1A 3V6",
+    position: { lat: 43.9782, lng: -78.3012 },
+    speedKw: 250,
+    chargerType: "V3 Supercharger",
+    plugAndCharge: true,
+    connectorType: "NACS",
+    totalStalls: 12,
+    availableStalls: 8,
+    detourTimeMinutes: 1,
+    costPerKwh: 0.37,
     status: "operational"
   },
   {
@@ -116,6 +161,21 @@ export const FALLBACK_STATIONS: ChargingStation[] = [
     status: "operational"
   },
   {
+    id: "ts-brockville-on",
+    name: "Tesla Supercharger - Brockville",
+    address: "1972 Parkedale Ave, Brockville, ON K6V 7N6",
+    position: { lat: 44.6052, lng: -75.6948 },
+    speedKw: 250,
+    chargerType: "V3 Supercharger",
+    plugAndCharge: true,
+    connectorType: "NACS",
+    totalStalls: 12,
+    availableStalls: 9,
+    detourTimeMinutes: 2,
+    costPerKwh: 0.38,
+    status: "operational"
+  },
+  {
     id: "ts-cornwall-on",
     name: "Tesla Supercharger - Cornwall (Brookdale)",
     address: "960 Brookdale Ave, Cornwall, ON K6J 4P5",
@@ -128,6 +188,36 @@ export const FALLBACK_STATIONS: ChargingStation[] = [
     availableStalls: 8,
     detourTimeMinutes: 2,
     costPerKwh: 0.39,
+    status: "operational"
+  },
+  {
+    id: "ts-montreal-pointeclaire",
+    name: "Tesla Supercharger - Pointe-Claire (Fairview)",
+    address: "6801 Rte Transcanadienne, Pointe-Claire, QC H9R 5J2",
+    position: { lat: 45.4468, lng: -73.8314 },
+    speedKw: 250,
+    chargerType: "V3 Supercharger",
+    plugAndCharge: true,
+    connectorType: "NACS",
+    totalStalls: 16,
+    availableStalls: 11,
+    detourTimeMinutes: 2,
+    costPerKwh: 0.40,
+    status: "operational"
+  },
+  {
+    id: "ts-montreal-brossard",
+    name: "Tesla Supercharger - Brossard (Quartier DIX30)",
+    address: "9120 Leduc Blvd, Brossard, QC J4Y 0B3",
+    position: { lat: 45.4445, lng: -73.4352 },
+    speedKw: 250,
+    chargerType: "V3 Supercharger",
+    plugAndCharge: true,
+    connectorType: "NACS",
+    totalStalls: 20,
+    availableStalls: 14,
+    detourTimeMinutes: 3,
+    costPerKwh: 0.41,
     status: "operational"
   },
 
@@ -299,9 +389,10 @@ export function getFallbackStations(origin: string, destination: string): Chargi
     searchTerms.includes("cambridge") || searchTerms.includes("toronto") || 
     searchTerms.includes("kitchener") || searchTerms.includes("cornwall") || 
     searchTerms.includes("ontario") || searchTerms.includes("canada") || 
-    searchTerms.includes("on") || searchTerms.includes("montreal") || searchTerms.includes("ottawa")
+    searchTerms.includes("on") || searchTerms.includes("montreal") || searchTerms.includes("ottawa") ||
+    searchTerms.includes("quebec") || searchTerms.includes("qc")
   ) {
-    regional = FALLBACK_STATIONS.filter(s => s.address.includes("ON"));
+    regional = FALLBACK_STATIONS.filter(s => s.address.includes("ON") || s.address.includes("QC"));
   } else if (
     searchTerms.includes("austin") || searchTerms.includes("dallas") || 
     searchTerms.includes("texas") || searchTerms.includes("houston") || searchTerms.includes("tx")

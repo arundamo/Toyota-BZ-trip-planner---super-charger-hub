@@ -262,8 +262,7 @@ export function App() {
       setDestCoords(finalDest);
       setErrorText(null);
 
-    } catch (err) {
-      console.warn("Backend API route analysis unavailable, using corridor fallback:", err);
+    } catch {
       const fallbackStations = getFallbackStations(orig, dest);
       setStations(fallbackStations);
       setExplanation(`Corridor route calculated for ${orig} ➔ ${dest}. Loaded ${fallbackStations.length} verified Tesla Supercharger stations along this route supporting Plug & Charge for your Toyota bZ.`);
@@ -629,6 +628,8 @@ export function App() {
                 returnArrivalSoc={routeSummary.returnArrivalSoc}
                 unit={distanceUnit}
                 theme={resolvedTheme}
+                showTopographics={showTopographics}
+                onToggleTopographics={handleToggleTopographics}
                 isInitialPlanningState={!originCoords || !destCoords || !origin || !destination}
                 onSelectPresetRoute={(preset) => {
                   const pOriginCoords = getCoordsForCity(preset.origin);

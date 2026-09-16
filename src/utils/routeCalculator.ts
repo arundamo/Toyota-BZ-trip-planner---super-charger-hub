@@ -63,8 +63,65 @@ export function getDistanceMiles(p1: LatLng, p2: LatLng): number {
   return Math.max(5, Math.round(R * c * 1.25));
 }
 
+// Helper to filter and order stations along a directed highway corridor
+export function filterStationsAlongCorridor(
+  from: LatLng,
+  to: LatLng,
+  stationList: ChargingStation[],
+  maxCrossTrackMiles: number = 45
+): ChargingStation[] {
+  const dx = to.lng - from.lng;
+  const dy = to.lat - from.lat;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0 || stationList.length === 0) return [];
+
+  const candidates = stationList.map(station => {
+    const sx = station.position.lng - from.lng;
+    const sy = station.position.lat - from.lat;
+    const proj = (sx * dx + sy * dy) / lenSq;
+
+    // Nearest point on line AB segment
+    const clampedProj = Math.max(0, Math.min(1, proj));
+    const closestPoint: LatLng = {
+      lat: from.lat + clampedProj * dy,
+      lng: from.lng + clampedProj * dx
+    };
+    const crossTrackMiles = getDistanceMiles(station.position, closestPoint);
+
+    return {
+      station,
+      proj,
+      crossTrackMiles
+    };
+  });
+
+  // Filter stations strictly along the travel direction:
+  // Must be between 2% and 98% along the travel vector
+  // (rejects stations behind the starting point or past the destination)
+  const forwardStations = candidates.filter(c => c.proj >= 0.02 && c.proj <= 0.98);
+
+  // Filter by corridor width (cross-track distance)
+  let corridorMatches = forwardStations.filter(c => c.crossTrackMiles <= maxCrossTrackMiles);
+
+  // If strict radius is too narrow for sparser rural routes, relax up to 75 miles
+  if (corridorMatches.length === 0 && forwardStations.length > 0) {
+    corridorMatches = forwardStations.filter(c => c.crossTrackMiles <= 75);
+  }
+
+  // Sort strictly along travel direction (ascending projection)
+  corridorMatches.sort((a, b) => a.proj - b.proj);
+
+  return corridorMatches.map(c => c.station);
+}
+
 // Helper to order stations along a directed vector
 export function sortStationsAlongVector(from: LatLng, to: LatLng, stationList: ChargingStation[]): ChargingStation[] {
+  const corridorFiltered = filterStationsAlongCorridor(from, to, stationList);
+  if (corridorFiltered.length > 0) {
+    return corridorFiltered;
+  }
+
+  // Fallback if corridor filtering yields no stations
   const dx = to.lng - from.lng;
   const dy = to.lat - from.lat;
   const lenSq = dx * dx + dy * dy;
@@ -99,7 +156,6 @@ function pickEvenlySpacedStations(stations: ChargingStation[], count: number): C
       selected.push(stations[targetIdx]);
       usedIndices.add(targetIdx);
     } else {
-      // Find nearest unused
       let found = false;
       for (let offset = 1; offset < stations.length; offset++) {
         const left = targetIdx - offset;
@@ -124,6 +180,173 @@ function pickEvenlySpacedStations(stations: ChargingStation[], count: number): C
   }
 
   return selected;
+}
+
+/**
+ * Selects optimal charging stops along the filtered corridor stations.
+ * Ensures:
+ * 1. Stops are reachable with safe battery buffer (>= 12-15%).
+ * 2. Charge amounts are calculated so the vehicle safely reaches the next stop or destination.
+ * 3. Never produces negative arrival SoC when chargers exist along the route.
+ */
+function selectOptimalCorridorStops(
+  origin: LatLng,
+  destination: LatLng,
+  corridorStations: ChargingStation[],
+  startingSoc: number,
+  targetDestSoc: number,
+  socPerMile: number,
+  stopsPreference: StopsPreference
+): { activeStations: ChargingStation[]; preferenceNote: string } {
+  if (stopsPreference === 0) {
+    return {
+      activeStations: [],
+      preferenceNote: 'User selected 0 stops (Direct drive)'
+    };
+  }
+
+  if (corridorStations.length === 0) {
+    return {
+      activeStations: [],
+      preferenceNote: 'Direct route (no intermediate corridor stations found)'
+    };
+  }
+
+  const oneWayDistanceMiles = getDistanceMiles(origin, destination);
+  const totalTripSocUsed = Math.round(oneWayDistanceMiles * socPerMile);
+  const directArrivalSoc = Math.round(startingSoc - totalTripSocUsed);
+
+  // If user selected an exact number of stops:
+  if (typeof stopsPreference === 'number' && stopsPreference > 0) {
+    const k = Math.min(corridorStations.length, stopsPreference);
+    const chosen = pickEvenlySpacedStations(corridorStations, k);
+    return {
+      activeStations: chosen,
+      preferenceNote: `User selected ${chosen.length} stop${chosen.length !== 1 ? 's' : ''}`
+    };
+  }
+
+  // 'auto' mode:
+  // Can we make the entire trip directly with arrival SoC >= targetDestSoc and >= 15%?
+  if (directArrivalSoc >= targetDestSoc && directArrivalSoc >= 15) {
+    return {
+      activeStations: [],
+      preferenceNote: 'Auto: Direct route optimal (no charging stops required)'
+    };
+  }
+
+  // If trip is directly reachable with safe battery (>15%) but needs a top-up to meet destination target SoC:
+  if (directArrivalSoc >= 15 && targetDestSoc > directArrivalSoc) {
+    const midStop = pickEvenlySpacedStations(corridorStations, 1);
+    return {
+      activeStations: midStop,
+      preferenceNote: 'Auto: 1 optimal stop selected to reach destination target SoC'
+    };
+  }
+
+  // Route planning simulation with battery reachability:
+  const selected: ChargingStation[] = [];
+  let currentPos = origin;
+  let currentSoc = startingSoc;
+  let remainingStations = [...corridorStations];
+
+  const MAX_STOPS = 6;
+  while (selected.length < MAX_STOPS) {
+    const distToDest = getDistanceMiles(currentPos, destination);
+    const socToDest = distToDest * socPerMile;
+
+    // Can we reach the destination safely from currentPos with currentSoc?
+    if (currentSoc - socToDest >= targetDestSoc && currentSoc - socToDest >= 12) {
+      break;
+    }
+
+    // Candidate stations ahead of current position
+    const stationsAhead = remainingStations.filter(s => {
+      const dFromCurrent = getDistanceMiles(currentPos, s.position);
+      const dToDest = getDistanceMiles(s.position, destination);
+      return dFromCurrent >= 10 && dToDest < distToDest - 8;
+    });
+
+    if (stationsAhead.length === 0) {
+      break;
+    }
+
+    // Evaluate reachability: station is reachable if arrival SoC >= 10%
+    const reachable = stationsAhead.map(s => {
+      const dist = getDistanceMiles(currentPos, s.position);
+      const arrival = currentSoc - (dist * socPerMile);
+      return { station: s, dist, arrival };
+    }).filter(item => item.arrival >= 10);
+
+    let chosenStation: ChargingStation;
+
+    if (reachable.length > 0) {
+      // Check if any reachable station allows completing the journey in 1 more leg (charging to 90%)
+      const canCompleteJourney = reachable.filter(item => {
+        const remainingDist = getDistanceMiles(item.station.position, destination);
+        const socNeeded = remainingDist * socPerMile;
+        return (90 - socNeeded) >= targetDestSoc;
+      });
+
+      if (canCompleteJourney.length > 0) {
+        // Pick the station closest to the balanced midpoint or with most comfortable arrival SoC (15-28%)
+        canCompleteJourney.sort((a, b) => Math.abs(a.arrival - 22) - Math.abs(b.arrival - 22));
+        chosenStation = canCompleteJourney[0].station;
+      } else {
+        // Multiple stops remaining: pick the furthest reachable station that maintains at least 12% SoC
+        reachable.sort((a, b) => {
+          if (a.arrival >= 12 && b.arrival >= 12) {
+            return b.dist - a.dist;
+          }
+          return b.arrival - a.arrival;
+        });
+        chosenStation = reachable[0].station;
+      }
+    } else {
+      // Battery is very low: pick closest station ahead to minimize drain
+      stationsAhead.sort((a, b) => getDistanceMiles(currentPos, a.position) - getDistanceMiles(currentPos, b.position));
+      chosenStation = stationsAhead[0];
+    }
+
+    selected.push(chosenStation);
+
+    // Advance position and battery state
+    const legDist = getDistanceMiles(currentPos, chosenStation.position);
+    const arrivalSoc = Math.round(currentSoc - (legDist * socPerMile));
+
+    const remainingDist = getDistanceMiles(chosenStation.position, destination);
+    const socNeededToDest = remainingDist * socPerMile;
+
+    let nextDeparture: number;
+    if (socNeededToDest + targetDestSoc <= 92) {
+      nextDeparture = Math.min(95, Math.ceil(socNeededToDest + targetDestSoc));
+    } else {
+      nextDeparture = 85;
+    }
+
+    currentPos = chosenStation.position;
+    currentSoc = Math.max(nextDeparture, arrivalSoc);
+
+    // Remove chosen and stations behind it
+    remainingStations = remainingStations.filter(s => {
+      return getDistanceMiles(s.position, destination) < remainingDist - 8;
+    });
+  }
+
+  // Fallback if simulation generated 0 stops but trip is not safe
+  if (selected.length === 0 && directArrivalSoc < targetDestSoc && corridorStations.length > 0) {
+    const needed = Math.max(1, Math.min(corridorStations.length, Math.ceil(oneWayDistanceMiles / 160)));
+    const balanced = pickEvenlySpacedStations(corridorStations, needed);
+    return {
+      activeStations: balanced,
+      preferenceNote: `Auto: ${balanced.length} optimal stop${balanced.length > 1 ? 's' : ''} planned for maximum efficiency`
+    };
+  }
+
+  return {
+    activeStations: selected,
+    preferenceNote: `Auto: ${selected.length} optimal stop${selected.length > 1 ? 's' : ''} planned for maximum efficiency`
+  };
 }
 
 /**
@@ -187,47 +410,18 @@ export function calculateRouteChargeTelemetry(
   // Case A: ONE-WAY TRIP
   // -------------------------------------------------------------
   if (tripType === 'one-way') {
-    const orderedStations = sortStationsAlongVector(originCoords, destCoords, stations);
+    const corridorStations = filterStationsAlongCorridor(originCoords, destCoords, stations);
+    const { activeStations, preferenceNote } = selectOptimalCorridorStops(
+      originCoords,
+      destCoords,
+      corridorStations,
+      safeStartingSoc,
+      safeTargetDestSoc,
+      socPerMile,
+      stopsPreference
+    );
 
-    // Determine active stations based on stopsPreference
-    let activeStations: ChargingStation[] = [];
-    let preferenceNote = '';
-
-    if (stopsPreference === 0) {
-      // Force 0 stops (Direct Drive)
-      activeStations = [];
-      preferenceNote = directArrivalSoc >= safeTargetDestSoc 
-        ? 'Direct non-stop trip selected by user'
-        : 'User selected 0 stops (Direct drive) - caution: arrival battery is below target';
-    } else if (typeof stopsPreference === 'number' && stopsPreference > 0) {
-      // User requested exact number of stops
-      activeStations = pickEvenlySpacedStations(orderedStations, stopsPreference);
-      preferenceNote = `User selected ${activeStations.length} stop${activeStations.length !== 1 ? 's' : ''}`;
-    } else {
-      // 'auto' mode: smart calculation
-      if (directArrivalSoc >= safeTargetDestSoc && directArrivalSoc >= 15) {
-        // Direct trip is completely safe
-        activeStations = [];
-        preferenceNote = 'Auto: Direct route optimal (no charging stops required)';
-      } else if (stations.length === 0) {
-        activeStations = [];
-        preferenceNote = 'Auto: No corridor stations available';
-      } else {
-        // Calculate minimum stops needed
-        if (directArrivalSoc >= 15 && safeTargetDestSoc > directArrivalSoc) {
-          // Just need 1 top-up stop to meet arrival goal
-          activeStations = pickEvenlySpacedStations(orderedStations, 1);
-          preferenceNote = 'Auto: 1 optimal stop selected to reach destination target SoC';
-        } else {
-          // Need enough stops so no leg exceeds ~180 miles (~70% range)
-          const neededStops = Math.max(1, Math.min(orderedStations.length, Math.ceil(oneWayDistanceMiles / 160)));
-          activeStations = pickEvenlySpacedStations(orderedStations, neededStops);
-          preferenceNote = `Auto: ${activeStations.length} optimal stop${activeStations.length > 1 ? 's' : ''} planned for maximum efficiency`;
-        }
-      }
-    }
-
-    // If no active stations (either chosen or direct)
+    // If no active stations (either direct or no chargers available)
     if (activeStations.length === 0) {
       const isDirectSafe = directArrivalSoc >= 15;
       return {
@@ -280,9 +474,10 @@ export function calculateRouteChargeTelemetry(
       cumulativeDistance += legDist;
       const socUsed = legDist * socPerMile;
       const arrivalSoc = Math.round(currentSoc - socUsed);
+      const safeArrivalSoc = Math.max(0, arrivalSoc);
 
       if (arrivalSoc < 15) hasLowSocWarning = true;
-      if (arrivalSoc < 0 && criticalStopIndex === null) criticalStopIndex = i;
+      if (arrivalSoc <= 0 && criticalStopIndex === null) criticalStopIndex = i;
 
       const nextLegDist = legDistances[i + 1];
       const nextLegSocNeeded = nextLegDist * socPerMile;
@@ -294,17 +489,16 @@ export function calculateRouteChargeTelemetry(
       let chargeNeededPercent: number;
       let stopReason: string | undefined;
 
-      // When user selects multiple custom stops, give each stop a comfortable balanced charge
       const isCustomMultiStop = typeof stopsPreference === 'number' && stopsPreference > 1;
 
       if (arrivalSoc >= minSocNeededForNextLeg && !isCustomMultiStop) {
-        targetDepartureSoc = arrivalSoc;
+        targetDepartureSoc = Math.min(95, arrivalSoc);
         chargeNeededPercent = 0;
-        stopReason = 'Optional quick stop / Battery sufficient for next leg';
+        stopReason = 'Battery sufficient for next route segment';
       } else {
-        const baseTarget = Math.max(minSocNeededForNextLeg, isCustomMultiStop ? Math.min(80, arrivalSoc + 25) : 55);
-        targetDepartureSoc = Math.min(95, Math.max(baseTarget, arrivalSoc + 10));
-        chargeNeededPercent = Math.max(0, targetDepartureSoc - arrivalSoc);
+        const baseTarget = Math.max(minSocNeededForNextLeg, isCustomMultiStop ? Math.min(80, safeArrivalSoc + 25) : 60);
+        targetDepartureSoc = Math.min(95, Math.max(baseTarget, safeArrivalSoc + 10));
+        chargeNeededPercent = Math.max(0, targetDepartureSoc - safeArrivalSoc);
         
         if (isFinalStop && safeTargetDestSoc > 20) {
           stopReason = `Charged to meet your ${safeTargetDestSoc}% destination arrival goal`;
@@ -313,6 +507,10 @@ export function calculateRouteChargeTelemetry(
         } else {
           stopReason = 'Recharge required for next route segment';
         }
+      }
+
+      if (arrivalSoc <= 0) {
+        stopReason = `⚠️ Range deficit: leg of ${Math.round(legDist)} mi exceeds battery charge without intermediate top-up`;
       }
 
       const effectiveKw = Math.min(station.speedKw, specs.maxChargeRateKw) * 0.85;
@@ -334,7 +532,7 @@ export function calculateRouteChargeTelemetry(
         chargeNeededPercent,
         estimatedChargeMinutes,
         arrivalWarning: arrivalSoc < 15,
-        arrivalCritical: arrivalSoc < 0,
+        arrivalCritical: arrivalSoc <= 0,
         stopReason
       });
 
@@ -372,8 +570,8 @@ export function calculateRouteChargeTelemetry(
   // -------------------------------------------------------------
   // Case B: TWO-WAY (ROUND TRIP) PLANNER
   // -------------------------------------------------------------
-  const outboundOrderedStations = sortStationsAlongVector(originCoords, destCoords, stations);
-  const returnOrderedStations = sortStationsAlongVector(destCoords, originCoords, stations);
+  const outboundCorridor = filterStationsAlongCorridor(originCoords, destCoords, stations);
+  const returnCorridor = filterStationsAlongCorridor(destCoords, originCoords, stations);
 
   const outboundSocUsedDirect = Math.round(oneWayDistanceMiles * socPerMile);
   const turnaroundArrivalSocWithoutCharging = Math.round(safeStartingSoc - outboundSocUsedDirect);
@@ -384,7 +582,6 @@ export function calculateRouteChargeTelemetry(
   let preferenceNote = '';
 
   if (stopsPreference === 0) {
-    // Force 0 stops for round trip
     activeOutboundStations = [];
     activeReturnStations = [];
     preferenceNote = directArrivalSoc >= safeTargetDestSoc
@@ -393,45 +590,57 @@ export function calculateRouteChargeTelemetry(
   } else if (typeof stopsPreference === 'number' && stopsPreference > 0) {
     const k = stopsPreference;
     if (k === 1) {
-      // 1 stop total
       if (turnaroundArrivalSocWithoutCharging < 20 || !hasDestinationCharging) {
-        // If outbound is tight or no dest charging, place 1 stop on return or outbound
-        if (turnaroundArrivalSocWithoutCharging < 15) {
-          activeOutboundStations = pickEvenlySpacedStations(outboundOrderedStations, 1);
-        } else {
-          activeReturnStations = pickEvenlySpacedStations(returnOrderedStations, 1);
+        if (turnaroundArrivalSocWithoutCharging < 15 && outboundCorridor.length > 0) {
+          activeOutboundStations = pickEvenlySpacedStations(outboundCorridor, 1);
+        } else if (returnCorridor.length > 0) {
+          activeReturnStations = pickEvenlySpacedStations(returnCorridor, 1);
+        } else if (outboundCorridor.length > 0) {
+          activeOutboundStations = pickEvenlySpacedStations(outboundCorridor, 1);
         }
-      } else {
-        activeReturnStations = pickEvenlySpacedStations(returnOrderedStations, 1);
+      } else if (returnCorridor.length > 0) {
+        activeReturnStations = pickEvenlySpacedStations(returnCorridor, 1);
       }
     } else if (k === 2) {
-      // 2 stops total: 1 Outbound + 1 Return
-      activeOutboundStations = pickEvenlySpacedStations(outboundOrderedStations, 1);
-      activeReturnStations = pickEvenlySpacedStations(returnOrderedStations, 1);
+      activeOutboundStations = outboundCorridor.length > 0 ? pickEvenlySpacedStations(outboundCorridor, 1) : [];
+      activeReturnStations = returnCorridor.length > 0 ? pickEvenlySpacedStations(returnCorridor, 1) : [];
     } else {
-      // 3 or more stops: evenly distribute across legs
       const outboundCount = Math.floor(k / 2);
       const returnCount = k - outboundCount;
-      activeOutboundStations = pickEvenlySpacedStations(outboundOrderedStations, outboundCount);
-      activeReturnStations = pickEvenlySpacedStations(returnOrderedStations, returnCount);
+      activeOutboundStations = pickEvenlySpacedStations(outboundCorridor, outboundCount);
+      activeReturnStations = pickEvenlySpacedStations(returnCorridor, returnCount);
     }
     preferenceNote = `User selected ${activeOutboundStations.length + activeReturnStations.length} stops (${activeOutboundStations.length} outbound, ${activeReturnStations.length} return)`;
   } else {
     // 'auto' mode
-    if (directArrivalSoc >= safeTargetDestSoc && directArrivalSoc >= 15) {
+    if (directArrivalSoc >= safeTargetDestSoc && directArrivalSoc >= 15 && hasDestinationCharging) {
       activeOutboundStations = [];
       activeReturnStations = [];
-      preferenceNote = 'Auto: Direct round trip (no charging stops needed)';
+      preferenceNote = 'Auto: Direct round trip with destination charging (0 highway stops needed)';
     } else {
-      // Determine if outbound needs stops
-      if (turnaroundArrivalSocWithoutCharging < 20 && outboundOrderedStations.length > 0) {
-        activeOutboundStations = pickEvenlySpacedStations(outboundOrderedStations, 1);
-      }
-      // Return leg stops
-      const returnNeeded = returnOrderedStations.length > 0 ? 1 : 0;
-      if (returnNeeded > 0) {
-        activeReturnStations = pickEvenlySpacedStations(returnOrderedStations, 1);
-      }
+      const outPlan = selectOptimalCorridorStops(
+        originCoords,
+        destCoords,
+        outboundCorridor,
+        safeStartingSoc,
+        safeTargetDestSoc,
+        socPerMile,
+        'auto'
+      );
+      activeOutboundStations = outPlan.activeStations;
+
+      const returnStartSoc = hasDestinationCharging ? 90 : Math.max(30, safeTargetDestSoc);
+      const returnPlan = selectOptimalCorridorStops(
+        destCoords,
+        originCoords,
+        returnCorridor,
+        returnStartSoc,
+        safeTargetDestSoc,
+        socPerMile,
+        'auto'
+      );
+      activeReturnStations = returnPlan.activeStations;
+
       preferenceNote = `Auto: ${activeOutboundStations.length + activeReturnStations.length} optimal round-trip stop${(activeOutboundStations.length + activeReturnStations.length) !== 1 ? 's' : ''}`;
     }
   }
@@ -497,14 +706,15 @@ export function calculateRouteChargeTelemetry(
     cumulativeDistance += legDist;
     const socUsed = legDist * socPerMile;
     const arrivalSoc = Math.round(currentSoc - socUsed);
+    const safeArrivalSoc = Math.max(0, arrivalSoc);
 
     if (arrivalSoc < 15) hasLowSocWarning = true;
-    if (arrivalSoc < 0 && criticalStopIndex === null) criticalStopIndex = stopCounter;
+    if (arrivalSoc <= 0 && criticalStopIndex === null) criticalStopIndex = stopCounter;
 
     const distToTurnaround = Math.max(8, getDistanceMiles(station.position, destCoords));
     const nextSocNeeded = distToTurnaround * socPerMile;
     const targetDepartureSoc = Math.min(95, Math.max(Math.ceil(nextSocNeeded + 25), 65));
-    const chargeNeededPercent = Math.max(0, targetDepartureSoc - arrivalSoc);
+    const chargeNeededPercent = Math.max(0, targetDepartureSoc - safeArrivalSoc);
 
     const effectiveKw = Math.min(station.speedKw, specs.maxChargeRateKw) * 0.85;
     const kWhDelivered = (chargeNeededPercent / 100) * specs.batteryCapacityKwh;
@@ -525,8 +735,10 @@ export function calculateRouteChargeTelemetry(
       chargeNeededPercent,
       estimatedChargeMinutes,
       arrivalWarning: arrivalSoc < 15,
-      arrivalCritical: arrivalSoc < 0,
-      stopReason: `Outbound recharge to reach turnaround destination`
+      arrivalCritical: arrivalSoc <= 0,
+      stopReason: arrivalSoc <= 0
+        ? `⚠️ Range deficit: leg exceeds battery charge without intermediate stop`
+        : `Outbound recharge to reach turnaround destination`
     };
 
     outboundStops.push(stopObj);
@@ -559,14 +771,15 @@ export function calculateRouteChargeTelemetry(
     cumulativeDistance += legDist;
     const socUsed = legDist * socPerMile;
     const arrivalSoc = Math.round(currentSoc - socUsed);
+    const safeArrivalSoc = Math.max(0, arrivalSoc);
 
     if (arrivalSoc < 15) hasLowSocWarning = true;
-    if (arrivalSoc < 0 && criticalStopIndex === null) criticalStopIndex = stopCounter;
+    if (arrivalSoc <= 0 && criticalStopIndex === null) criticalStopIndex = stopCounter;
 
     const distToOrigin = Math.max(8, getDistanceMiles(station.position, originCoords));
     const nextSocNeeded = distToOrigin * socPerMile;
     const targetDepartureSoc = Math.min(95, Math.max(Math.ceil(nextSocNeeded + safeTargetDestSoc), 60));
-    const chargeNeededPercent = Math.max(0, targetDepartureSoc - arrivalSoc);
+    const chargeNeededPercent = Math.max(0, targetDepartureSoc - safeArrivalSoc);
 
     const effectiveKw = Math.min(station.speedKw, specs.maxChargeRateKw) * 0.85;
     const kWhDelivered = (chargeNeededPercent / 100) * specs.batteryCapacityKwh;
@@ -587,8 +800,10 @@ export function calculateRouteChargeTelemetry(
       chargeNeededPercent,
       estimatedChargeMinutes,
       arrivalWarning: arrivalSoc < 15,
-      arrivalCritical: arrivalSoc < 0,
-      stopReason: `Return recharge to arrive back at origin with ≥${safeTargetDestSoc}% SoC`
+      arrivalCritical: arrivalSoc <= 0,
+      stopReason: arrivalSoc <= 0
+        ? `⚠️ Range deficit: leg exceeds battery charge without intermediate stop`
+        : `Return recharge to arrive back at origin with ≥${safeTargetDestSoc}% SoC`
     };
 
     returnStops.push(stopObj);

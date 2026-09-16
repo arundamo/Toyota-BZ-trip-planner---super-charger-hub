@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { ChargingStation, LatLng, DistanceUnit } from '../types';
 import { CalculatedStationStop, TripType } from '../utils/routeCalculator';
 import { formatDistance, formatDistanceDelta } from '../utils/unitConverter';
-import { Compass, RefreshCw, Layers, ShieldCheck, Zap, ArrowLeftRight, Navigation } from 'lucide-react';
+import { Compass, RefreshCw, Layers, ShieldCheck, Zap, ArrowLeftRight, Navigation, Mountain } from 'lucide-react';
 
 interface RouteMapProps {
   originName: string;
@@ -24,6 +24,8 @@ interface RouteMapProps {
   isInitialPlanningState?: boolean;
   onSelectPresetRoute?: (preset: { origin: string; destination: string }) => void;
   theme?: 'light' | 'dark';
+  showTopographics?: boolean;
+  onToggleTopographics?: () => void;
 }
 
 export const RouteMap: React.FC<RouteMapProps> = ({
@@ -42,7 +44,9 @@ export const RouteMap: React.FC<RouteMapProps> = ({
   unit = 'miles' as DistanceUnit,
   isInitialPlanningState,
   onSelectPresetRoute,
-  theme = 'dark'
+  theme = 'dark',
+  showTopographics = false,
+  onToggleTopographics
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -85,13 +89,17 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       attributionControl: false
     });
 
-    const tileUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+    const tileUrl = showTopographics
+      ? 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png'
+      : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 
     const tileLayer = L.tileLayer(tileUrl, {
-      maxZoom: 19,
+      maxZoom: showTopographics ? 17 : 19,
       subdomains: ['a', 'b', 'c'],
       className: theme === 'dark' ? 'dark-map-tiles' : 'light-map-tiles',
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors'
+      attribution: showTopographics
+        ? '&copy; <a href="https://opentopomap.org">OpenTopoMap</a>'
+        : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
     }).addTo(map);
     tileLayerRef.current = tileLayer;
 
@@ -105,7 +113,7 @@ export const RouteMap: React.FC<RouteMapProps> = ({
     };
   }, []);
 
-  // Update tile layer whenever theme switches
+  // Update tile layer whenever theme or topography toggle switches
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
@@ -114,13 +122,17 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       map.removeLayer(tileLayerRef.current);
     }
 
-    const tileUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+    const tileUrl = showTopographics
+      ? 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png'
+      : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 
     const newTileLayer = L.tileLayer(tileUrl, {
-      maxZoom: 19,
+      maxZoom: showTopographics ? 17 : 19,
       subdomains: ['a', 'b', 'c'],
       className: theme === 'dark' ? 'dark-map-tiles' : 'light-map-tiles',
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors'
+      attribution: showTopographics
+        ? '&copy; <a href="https://opentopomap.org">OpenTopoMap</a>'
+        : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
     }).addTo(map);
     
     // Send tile layer to back so route polylines remain visible
@@ -128,7 +140,7 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       newTileLayer.bringToBack();
     }
     tileLayerRef.current = newTileLayer;
-  }, [theme]);
+  }, [theme, showTopographics]);
 
   // Update markers, active route polyline, and bounds whenever locations or stops change
   useEffect(() => {
@@ -561,18 +573,40 @@ export const RouteMap: React.FC<RouteMapProps> = ({
         </div>
 
         {/* Cohesive Top-Right Action & Status Toolbar */}
-        <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
-          {/* Status Badge: Route Computed / Planning Mode */}
+        <div className="inline-flex items-center gap-1.5 p-1 rounded-2xl bg-slate-100/90 dark:bg-slate-950/80 border border-slate-200/90 dark:border-slate-800 shrink-0 flex-wrap sm:flex-nowrap shadow-sm">
+          {/* Status Badge: Route Computed / Direct Drive / Planning Mode */}
           {isPlanningMode ? (
-            <div className="h-7 px-2.5 rounded-xl text-xs font-mono font-bold flex items-center gap-1.5 border border-cyan-300 dark:border-cyan-500/30 bg-cyan-50 dark:bg-cyan-500/10 text-cyan-800 dark:text-cyan-300">
+            <div className="h-7 px-2.5 rounded-xl text-[11px] font-mono font-bold flex items-center gap-1.5 border border-cyan-200 dark:border-cyan-500/30 bg-cyan-50 dark:bg-cyan-500/10 text-cyan-800 dark:text-cyan-300">
               <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 dark:bg-cyan-400 animate-pulse"></span>
               <span>PLANNING MODE</span>
             </div>
-          ) : (
-            <div className="h-7 px-2.5 rounded-xl text-xs font-mono font-bold flex items-center gap-1.5 border border-emerald-300 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 shadow-sm">
+          ) : isDirectRoute || calculatedStops.length === 0 ? (
+            <div className="h-7 px-2.5 rounded-xl text-[11px] font-mono font-bold flex items-center gap-1.5 border border-emerald-300 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 shadow-sm">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400"></span>
+              <span>DIRECT DRIVE: 0 STOPS</span>
+            </div>
+          ) : (
+            <div className="h-7 px-2.5 rounded-xl text-[11px] font-mono font-bold flex items-center gap-1.5 border border-cyan-300 dark:border-cyan-500/30 bg-cyan-50 dark:bg-cyan-500/10 text-cyan-800 dark:text-cyan-300 shadow-sm">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 dark:bg-cyan-400"></span>
               <span>ROUTE COMPUTED</span>
             </div>
+          )}
+
+          {/* Topo toggle button */}
+          {onToggleTopographics && (
+            <button
+              type="button"
+              onClick={onToggleTopographics}
+              className={`h-7 px-2.5 rounded-xl text-[11px] font-mono flex items-center space-x-1.5 transition-all border cursor-pointer font-bold ${
+                showTopographics
+                  ? 'bg-cyan-500 text-slate-950 border-cyan-400 shadow-sm font-extrabold'
+                  : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border-slate-250 dark:border-slate-800 hover:text-slate-900 dark:hover:text-white'
+              }`}
+              title="Toggle topographical terrain layer"
+            >
+              <Mountain className="h-3.5 w-3.5" />
+              <span>Topo: {showTopographics ? 'Visible' : 'Hidden'}</span>
+            </button>
           )}
 
           {/* Action Toggles: Hide Optional Stations & Fit Recenter */}
@@ -582,9 +616,9 @@ export const RouteMap: React.FC<RouteMapProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowOptionalStations(!showOptionalStations)}
-                  className={`h-7 px-2.5 rounded-xl text-xs font-mono flex items-center space-x-1.5 transition-all border cursor-pointer font-bold ${
+                  className={`h-7 px-2.5 rounded-xl text-[11px] font-mono flex items-center space-x-1.5 transition-all border cursor-pointer font-bold ${
                     showOptionalStations
-                      ? 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700 hover:text-slate-900 dark:hover:text-white'
+                      ? 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-250 dark:border-slate-800 hover:text-slate-900 dark:hover:text-white'
                       : 'bg-cyan-50 dark:bg-cyan-500/10 text-cyan-800 dark:text-cyan-400 border-cyan-300 dark:border-cyan-500/30 hover:bg-cyan-100 dark:hover:bg-cyan-500/20'
                   }`}
                   title="Toggle display of unselected/optional corridor stations"
@@ -597,7 +631,7 @@ export const RouteMap: React.FC<RouteMapProps> = ({
               <button
                 type="button"
                 onClick={handleRecenter}
-                className="h-7 px-2.5 rounded-xl text-xs font-sans font-bold flex items-center space-x-1.5 transition-all cursor-pointer border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-cyan-700 dark:text-cyan-400 hover:text-cyan-900 dark:hover:text-cyan-300 shadow-sm"
+                className="h-7 px-2.5 rounded-xl text-[11px] font-sans font-bold flex items-center space-x-1.5 transition-all cursor-pointer border border-slate-250 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-cyan-700 dark:text-cyan-400 hover:text-cyan-900 dark:hover:text-cyan-300 shadow-sm"
                 title="Fit map view to route points"
               >
                 <RefreshCw className="h-3.5 w-3.5" />

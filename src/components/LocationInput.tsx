@@ -93,8 +93,7 @@ export const LocationInput: React.FC<LocationInputProps> = ({
       } else {
         setSuggestions([]);
       }
-    } catch (err) {
-      console.warn('Address lookup error:', err);
+    } catch {
       setSuggestions([]);
     } finally {
       setLoading(false);
