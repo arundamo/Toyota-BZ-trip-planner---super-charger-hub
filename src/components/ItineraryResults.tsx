@@ -42,6 +42,8 @@ interface ItineraryResultsProps {
   showOptionalStations: boolean;
   setShowOptionalStations: (show: boolean | ((prev: boolean) => boolean)) => void;
   onResetFilters: () => void;
+  allStations?: ChargingStation[];
+  onStopsPreferenceChange?: (pref: StopsPreference) => void;
 }
 
 export default function ItineraryResults({
@@ -63,7 +65,9 @@ export default function ItineraryResults({
   onSelectStation,
   showOptionalStations,
   setShowOptionalStations,
-  onResetFilters
+  onResetFilters,
+  allStations = [],
+  onStopsPreferenceChange
 }: ItineraryResultsProps) {
   return (
     <section id="results-table-section" className="flex flex-col overflow-hidden space-y-3">
@@ -356,23 +360,54 @@ export default function ItineraryResults({
             )}
           </div>
         ) : routeSummary.stops.length === 0 ? (
-          /* Filter options too narrow */
-          <div className="flex flex-col items-center justify-center p-6 text-center space-y-3 max-w-sm mx-auto my-6">
-            <SlidersHorizontal className="h-8 w-8 text-amber-500 stroke-[1.5]" />
-            <div className="space-y-1 font-sans">
-              <h4 className="text-xs font-extrabold text-slate-900 dark:text-white uppercase">Filter criteria too strict</h4>
-              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed font-sans">
-                No stations match your criteria. Try decreasing required speed or stall requirements.
-              </p>
+          stopsPreference === 0 ? (
+            /* User explicitly picked 0 stops but battery is deficient or below target */
+            <div className="flex flex-col items-center justify-center p-6 text-center space-y-3 max-w-md mx-auto my-6 bg-amber-50 dark:bg-amber-950/20 border border-amber-300 dark:border-amber-500/30 rounded-2xl">
+              <AlertCircle className="h-8 w-8 text-amber-500 stroke-[1.5]" />
+              <div className="space-y-1 font-sans">
+                <h4 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase">Charging Required To Reach Goal</h4>
+                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed font-sans">
+                  You selected 0 charging stops (direct drive). However, arriving with your desired <strong className="text-slate-900 dark:text-white font-mono">{targetDestinationSoc}% SoC</strong> at {destination} requires at least one charging top-up (direct arrival is ~<strong className="text-amber-600 dark:text-amber-400 font-mono">{routeSummary.directArrivalSoc <= 0 ? '0% / Depleted' : `${routeSummary.directArrivalSoc}%`}</strong>).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onStopsPreferenceChange?.('auto')}
+                className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-mono font-bold py-2 px-4 rounded-xl transition-all shadow-sm cursor-pointer"
+              >
+                Auto-Plan Charging Stops
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={onResetFilters}
-              className="bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-cyan-500 text-cyan-700 dark:text-cyan-400 text-[10px] uppercase tracking-wider py-1.5 px-3 rounded-lg transition-all font-mono cursor-pointer font-bold"
-            >
-              Reset Filters to Default
-            </button>
-          </div>
+          ) : allStations.length > 0 && filteredStations.length === 0 ? (
+            /* Filter options too narrow */
+            <div className="flex flex-col items-center justify-center p-6 text-center space-y-3 max-w-sm mx-auto my-6">
+              <SlidersHorizontal className="h-8 w-8 text-amber-500 stroke-[1.5]" />
+              <div className="space-y-1 font-sans">
+                <h4 className="text-xs font-extrabold text-slate-900 dark:text-white uppercase">Filter criteria too strict</h4>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed font-sans">
+                  No stations match your criteria. Try decreasing required speed or stall requirements.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onResetFilters}
+                className="bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-cyan-500 text-cyan-700 dark:text-cyan-400 text-[10px] uppercase tracking-wider py-1.5 px-3 rounded-lg transition-all font-mono cursor-pointer font-bold"
+              >
+                Reset Filters to Default
+              </button>
+            </div>
+          ) : (
+            /* No corridor stations matched */
+            <div className="flex flex-col items-center justify-center p-6 text-center space-y-3 max-w-md mx-auto my-6">
+              <Compass className="h-8 w-8 text-cyan-500 stroke-[1.5]" />
+              <div className="space-y-1 font-sans">
+                <h4 className="text-xs font-extrabold text-slate-900 dark:text-white uppercase">No Stations Available Along Corridor</h4>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed font-sans">
+                  No Tesla Superchargers open to non-Tesla EVs were found within 70 miles of this route corridor.
+                </p>
+              </div>
+            </div>
+          )
         ) : (
           /* REQUIRED / PLANNED CHARGING STOPS TABLE */
           <div className="overflow-auto relative z-10 select-none">

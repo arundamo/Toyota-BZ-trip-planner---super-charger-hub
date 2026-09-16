@@ -198,23 +198,29 @@ function selectOptimalCorridorStops(
   socPerMile: number,
   stopsPreference: StopsPreference
 ): { activeStations: ChargingStation[]; preferenceNote: string } {
+  const oneWayDistanceMiles = getDistanceMiles(origin, destination);
+  const totalTripSocUsed = Math.round(oneWayDistanceMiles * socPerMile);
+  const directArrivalSoc = Math.round(startingSoc - totalTripSocUsed);
+
   if (stopsPreference === 0) {
+    const isDirectSafe = directArrivalSoc >= targetDestSoc && directArrivalSoc >= 15;
     return {
       activeStations: [],
-      preferenceNote: 'User selected 0 stops (Direct drive)'
+      preferenceNote: isDirectSafe 
+        ? 'User selected 0 stops (Direct drive)' 
+        : 'User selected 0 stops (Direct drive) — Additional charging needed to meet destination SoC goal'
     };
   }
 
   if (corridorStations.length === 0) {
+    const isDirectSafe = directArrivalSoc >= targetDestSoc && directArrivalSoc >= 15;
     return {
       activeStations: [],
-      preferenceNote: 'Direct route (no intermediate corridor stations found)'
+      preferenceNote: isDirectSafe 
+        ? 'Auto: Direct route optimal (destination safely reachable without charging)' 
+        : 'Charging required along corridor (no intermediate stations matched)'
     };
   }
-
-  const oneWayDistanceMiles = getDistanceMiles(origin, destination);
-  const totalTripSocUsed = Math.round(oneWayDistanceMiles * socPerMile);
-  const directArrivalSoc = Math.round(startingSoc - totalTripSocUsed);
 
   // If user selected an exact number of stops:
   if (typeof stopsPreference === 'number' && stopsPreference > 0) {
@@ -423,7 +429,7 @@ export function calculateRouteChargeTelemetry(
 
     // If no active stations (either direct or no chargers available)
     if (activeStations.length === 0) {
-      const isDirectSafe = directArrivalSoc >= 15;
+      const isDirectSafe = directArrivalSoc >= safeTargetDestSoc && directArrivalSoc >= 15;
       return {
         startingSoc: safeStartingSoc,
         targetDestinationSoc: safeTargetDestSoc,
@@ -433,17 +439,17 @@ export function calculateRouteChargeTelemetry(
         stops: [],
         outboundStops: [],
         returnStops: [],
-        hasLowSocWarning: directArrivalSoc < 15,
+        hasLowSocWarning: directArrivalSoc < 15 || directArrivalSoc < safeTargetDestSoc,
         criticalStopIndex: directArrivalSoc < 0 ? 0 : null,
         recommendedMinStartingSoc: Math.min(100, Math.ceil(totalTripSocUsed + safeTargetDestSoc)),
-        isDirectRoute: true,
+        isDirectRoute: isDirectSafe,
         directDistanceMiles: oneWayDistanceMiles,
         directSocUsed: totalTripSocUsed,
         directArrivalSoc,
         tripType,
         stopsPreference,
         plannedStopCount: 0,
-        stopsPreferenceNote: preferenceNote || (isDirectSafe ? 'Direct route' : 'Direct route with low battery warning'),
+        stopsPreferenceNote: preferenceNote || (isDirectSafe ? 'Direct route optimal' : 'Charging needed along corridor to reach destination target SoC'),
         effectiveRangeMiles,
         consumptionPenaltyPercent,
         rangeAdjustmentExplanation
@@ -656,6 +662,8 @@ export function calculateRouteChargeTelemetry(
     }
     const finalReturnArrivalSoc = Math.max(0, afterDestSoc - outboundSocUsedDirect);
 
+    const isDirectSafe = finalReturnArrivalSoc >= safeTargetDestSoc && finalReturnArrivalSoc >= 15 && turnaroundSoc >= 15;
+
     return {
       startingSoc: safeStartingSoc,
       targetDestinationSoc: safeTargetDestSoc,
@@ -666,10 +674,10 @@ export function calculateRouteChargeTelemetry(
       stops: [],
       outboundStops: [],
       returnStops: [],
-      hasLowSocWarning: finalReturnArrivalSoc < 15 || turnaroundSoc < 15,
+      hasLowSocWarning: finalReturnArrivalSoc < 15 || turnaroundSoc < 15 || finalReturnArrivalSoc < safeTargetDestSoc,
       criticalStopIndex: (turnaroundSoc < 0 || finalReturnArrivalSoc < 0) ? 0 : null,
       recommendedMinStartingSoc: Math.min(100, Math.ceil(totalTripSocUsed + safeTargetDestSoc)),
-      isDirectRoute: true,
+      isDirectRoute: isDirectSafe,
       directDistanceMiles: totalTripDistanceMiles,
       directSocUsed: totalTripSocUsed,
       directArrivalSoc: finalReturnArrivalSoc,

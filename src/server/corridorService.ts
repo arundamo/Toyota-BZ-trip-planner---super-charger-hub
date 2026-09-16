@@ -484,7 +484,7 @@ export async function analyzeRouteHandler(req: any, res: any) {
       explanation = `Trip pre-planned for your ${isTwoWay ? 'round trip' : 'one-way journey'} between ${origin} and ${destination}. Starting at ${initialSocPercent}% SoC provides real-world range for your Toyota bZ. On this corridor, Tesla V3/V4 Superchargers open to non-Tesla EVs support direct ISO 15118 Autocharge/Plug & Charge without requiring external smartphone apps.`;
     }
 
-    generatedStations = getFallbackStations(origin, destination);
+    generatedStations = getFallbackStations(origin, destination, originCoords, destCoords);
   }
 
   return res.status(200).json({

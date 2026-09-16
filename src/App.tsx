@@ -229,7 +229,7 @@ export function App() {
       setExplanation(data.explanation || "");
       const returnedStations: ChargingStation[] = (data.stations && data.stations.length > 0)
         ? data.stations
-        : getFallbackStations(orig, dest);
+        : getFallbackStations(orig, dest, resolvedOrigin, resolvedDest);
       setStations(returnedStations);
 
       let finalOrigin = data.originCoords && typeof data.originCoords.lat === 'number'
@@ -263,7 +263,7 @@ export function App() {
       setErrorText(null);
 
     } catch {
-      const fallbackStations = getFallbackStations(orig, dest);
+      const fallbackStations = getFallbackStations(orig, dest, resolvedOrigin, resolvedDest);
       setStations(fallbackStations);
       setExplanation(`Corridor route calculated for ${orig} ➔ ${dest}. Loaded ${fallbackStations.length} verified Tesla Supercharger stations along this route supporting Plug & Charge for your Toyota bZ.`);
       setErrorText(null);
@@ -683,6 +683,8 @@ export function App() {
                 showTopographics={showTopographics}
                 onToggleTopographics={handleToggleTopographics}
                 filteredStations={filteredStations}
+                allStations={stations}
+                onStopsPreferenceChange={setStopsPreference}
                 selectedStationId={selectedStationId}
                 onSelectStation={setSelectedStationId}
                 showOptionalStations={showOptionalStations}
