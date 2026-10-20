@@ -3,7 +3,8 @@ import {
   FALLBACK_STATIONS, 
   POPULAR_LOCATIONS_INDEX, 
   getDistance, 
-  getFallbackStations 
+  getFallbackStations,
+  bridgeCorridorGaps
 } from "../data/fallbackCorridors";
 
 let geminiClient: GoogleGenAI | null = null;
@@ -485,6 +486,27 @@ export async function analyzeRouteHandler(req: any, res: any) {
     }
 
     generatedStations = getFallbackStations(origin, destination, originCoords, destCoords);
+  }
+
+  // Pre-resolve coordinates from popular index if still null
+  if (!originCoords && origin) {
+    const p1 = POPULAR_LOCATIONS_INDEX.find(item => 
+      origin.toLowerCase().includes(item.mainText.toLowerCase()) || 
+      item.displayName.toLowerCase().includes(origin.toLowerCase())
+    );
+    if (p1) originCoords = { lat: p1.lat, lng: p1.lng };
+  }
+  if (!destCoords && destination) {
+    const p2 = POPULAR_LOCATIONS_INDEX.find(item => 
+      destination.toLowerCase().includes(item.mainText.toLowerCase()) || 
+      item.displayName.toLowerCase().includes(destination.toLowerCase())
+    );
+    if (p2) destCoords = { lat: p2.lat, lng: p2.lng };
+  }
+
+  // Ensure continuous charging along long routes (no gaps > 135 miles)
+  if (originCoords && destCoords && generatedStations.length > 0) {
+    generatedStations = bridgeCorridorGaps(originCoords, destCoords, generatedStations, 135);
   }
 
   return res.status(200).json({

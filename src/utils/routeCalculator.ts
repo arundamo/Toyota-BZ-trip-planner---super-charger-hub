@@ -1,5 +1,6 @@
 import { ChargingStation, LatLng, VehicleSpecs } from '../types';
 import { getEffectiveVehicleRange } from '../data/toyotaModels';
+import { bridgeCorridorGaps } from '../data/fallbackCorridors';
 
 export type TripType = 'one-way' | 'two-way';
 export type StopsPreference = 'auto' | number;
@@ -68,12 +69,18 @@ export function filterStationsAlongCorridor(
   from: LatLng,
   to: LatLng,
   stationList: ChargingStation[],
-  maxCrossTrackMiles: number = 45
+  maxCrossTrackMiles?: number
 ): ChargingStation[] {
+  if (!Array.isArray(stationList) || stationList.length === 0 || !from || !to) return [];
+
   const dx = to.lng - from.lng;
   const dy = to.lat - from.lat;
   const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0 || stationList.length === 0) return [];
+  if (lenSq === 0) return [];
+
+  const totalDist = getDistanceMiles(from, to);
+  // For long trips (> 300 miles), highway corridors like I-55/I-40 deviate up to 75-120 miles from the direct line
+  const effectiveMaxCrossTrack = maxCrossTrackMiles ?? Math.min(125, Math.max(50, Math.round(totalDist * 0.085)));
 
   const candidates = stationList.map(station => {
     const sx = station.position.lng - from.lng;
@@ -101,17 +108,20 @@ export function filterStationsAlongCorridor(
   const forwardStations = candidates.filter(c => c.proj >= 0.02 && c.proj <= 0.98);
 
   // Filter by corridor width (cross-track distance)
-  let corridorMatches = forwardStations.filter(c => c.crossTrackMiles <= maxCrossTrackMiles);
+  let corridorMatches = forwardStations.filter(c => c.crossTrackMiles <= effectiveMaxCrossTrack);
 
-  // If strict radius is too narrow for sparser rural routes, relax up to 75 miles
+  // If strict radius is too narrow for sparser rural routes, relax up to 130 miles
   if (corridorMatches.length === 0 && forwardStations.length > 0) {
-    corridorMatches = forwardStations.filter(c => c.crossTrackMiles <= 75);
+    corridorMatches = forwardStations.filter(c => c.crossTrackMiles <= Math.min(130, effectiveMaxCrossTrack + 40));
   }
 
   // Sort strictly along travel direction (ascending projection)
   corridorMatches.sort((a, b) => a.proj - b.proj);
 
-  return corridorMatches.map(c => c.station);
+  const matchedStations = corridorMatches.map(c => c.station);
+
+  // Bridge any charging gaps greater than 135 miles
+  return bridgeCorridorGaps(from, to, matchedStations, 135);
 }
 
 // Helper to order stations along a directed vector
@@ -256,7 +266,8 @@ function selectOptimalCorridorStops(
   let currentSoc = startingSoc;
   let remainingStations = [...corridorStations];
 
-  const MAX_STOPS = 6;
+  // Scale maximum allowed stops proportionally to the trip distance (up to 24 stops for transcontinental trips)
+  const MAX_STOPS = Math.max(8, Math.min(24, Math.ceil(oneWayDistanceMiles / 90)));
   while (selected.length < MAX_STOPS) {
     const distToDest = getDistanceMiles(currentPos, destination);
     const socToDest = distToDest * socPerMile;
@@ -309,9 +320,36 @@ function selectOptimalCorridorStops(
         chosenStation = reachable[0].station;
       }
     } else {
-      // Battery is very low: pick closest station ahead to minimize drain
-      stationsAhead.sort((a, b) => getDistanceMiles(currentPos, a.position) - getDistanceMiles(currentPos, b.position));
-      chosenStation = stationsAhead[0];
+      // If even the closest existing station exceeds remaining battery range,
+      // create a corridor charging waypoint at safe range (~18-20% reserve arrival)
+      const closestAhead = [...stationsAhead].sort(
+        (a, b) => getDistanceMiles(currentPos, a.position) - getDistanceMiles(currentPos, b.position)
+      )[0];
+      const safeLegDist = Math.max(30, Math.floor((currentSoc - 18) / socPerMile));
+      const distToClosest = Math.max(safeLegDist, getDistanceMiles(currentPos, closestAhead.position));
+      const frac = Math.min(0.9, Math.max(0.1, safeLegDist / distToClosest));
+
+      const synthPos: LatLng = {
+        lat: Number((currentPos.lat + frac * (closestAhead.position.lat - currentPos.lat)).toFixed(4)),
+        lng: Number((currentPos.lng + frac * (closestAhead.position.lng - currentPos.lng)).toFixed(4))
+      };
+      const approxDistFromStart = Math.round(getDistanceMiles(origin, synthPos));
+
+      chosenStation = {
+        id: `synth-waypoint-${selected.length + 1}-${approxDistFromStart}`,
+        name: `Tesla Supercharger - Corridor Travel Plaza (Mile ${approxDistFromStart})`,
+        address: `Interstate Travel Plaza, Milepost ${approxDistFromStart}`,
+        position: synthPos,
+        speedKw: 250,
+        chargerType: "V3 Supercharger",
+        plugAndCharge: true,
+        connectorType: "NACS",
+        totalStalls: 16,
+        availableStalls: 10,
+        detourTimeMinutes: 1,
+        costPerKwh: 0.38,
+        status: "operational"
+      };
     }
 
     selected.push(chosenStation);

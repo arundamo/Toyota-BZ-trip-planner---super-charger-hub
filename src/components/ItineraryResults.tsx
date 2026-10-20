@@ -506,9 +506,9 @@ export default function ItineraryResults({
                             ? 'bg-amber-100 dark:bg-amber-500/15 text-amber-800 dark:text-amber-400 border-amber-300 dark:border-amber-500/30'
                             : 'bg-emerald-100 dark:bg-emerald-500/10 text-emerald-800 dark:text-emerald-400 border-emerald-300 dark:border-emerald-500/25'
                         }`}
-                        title={arrivalSoc < 0 ? `Battery depleted before arrival (deficit of ${Math.abs(arrivalSoc)}%)` : `Arrival SoC: ${arrivalSoc}%`}
+                        title={arrivalSoc <= 0 ? `Battery depleted before arrival (deficit of ${Math.abs(arrivalSoc)}% below 0)` : `Arrival SoC: ${arrivalSoc}%`}
                         >
-                          {arrivalSoc < 0 ? `0% (${arrivalSoc}%)` : `${arrivalSoc}%`}
+                          {arrivalSoc <= 0 ? '0% (Deficit)' : `${arrivalSoc}%`}
                         </span>
                       </td>
 
@@ -604,7 +604,7 @@ export default function ItineraryResults({
                             ? 'text-amber-700 dark:text-amber-400'
                             : 'text-emerald-700 dark:text-emerald-400'
                         }`}>
-                          {stop.arrivalSoc < 0 ? `0% (${stop.arrivalSoc}%)` : `${stop.arrivalSoc}%`}
+                          {stop.arrivalSoc <= 0 ? '0% (Deficit)' : `${stop.arrivalSoc}%`}
                         </span>
                       </div>
                       <div>
